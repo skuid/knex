@@ -41,9 +41,15 @@ assign(QueryCompiler_MySQL.prototype, {
   // Compiles a `columnInfo` query.
   columnInfo() {
     const column = this.single.columnInfo;
+    const sql = `
+select * from information_schema.columns
+where table_name = ?
+and table_schema = ?`;
+    const bindings = [this.single.table];
+    bindings.push(this.single.schema || this.client.database());
     return {
-      sql: 'select * from information_schema.columns where table_name = ? and table_schema = ?',
-      bindings: [this.single.table, this.client.database()],
+      sql: sql,
+      bindings: bindings,
       output(resp) {
         const out = resp.reduce(function(columns, val) {
           columns[val.COLUMN_NAME] = {
