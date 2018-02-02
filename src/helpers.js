@@ -62,12 +62,26 @@ export function containsUndefined(mixed) {
     }
   } else if(isObject(mixed)) {
     for(const key in mixed) {
-      if(argContainsUndefined) break;
-      argContainsUndefined = this.containsUndefined(mixed[key]);
+      if (mixed.hasOwnProperty(key)) {
+        if(argContainsUndefined) break;
+        argContainsUndefined = this.containsUndefined(mixed[key]);
+      }
     }
   } else {
     argContainsUndefined = isUndefined(mixed);
   }
 
   return argContainsUndefined;
+}
+
+export function addQueryContext(Target) {
+  // Stores or returns (if called with no arguments) context passed to
+  // wrapIdentifier and postProcessResponse hooks
+  Target.prototype.queryContext = function(context) {
+    if (isUndefined(context)) {
+      return this._queryContext;
+    }
+    this._queryContext = context;
+    return this;
+  }
 }

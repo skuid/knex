@@ -10,6 +10,108 @@ module.exports = function(knex) {
 
   describe('Additional', function () {
 
+    describe("Custom response processing", () => {
+
+      before('setup custom response handler', () => {
+        knex.client.config.postProcessResponse = (response, queryContext) => {
+          response.callCount = response.callCount ? (response.callCount + 1) : 1;
+          response.queryContext = queryContext;
+          return response;
+        };
+      });
+
+      after('restore client configuration', () => {
+        knex.client.config.postProcessResponse = null;
+      });
+
+      it('should process normal response', () => {
+        return knex('accounts').limit(1).then(res => {
+          expect(res.callCount).to.equal(1);
+        });
+      });
+
+      it('should pass query context to the custom handler', () => {
+        return knex('accounts')
+          .queryContext('the context')
+          .limit(1)
+          .then(res => {
+            expect(res.queryContext).to.equal('the context');
+          });
+      });
+
+      it('should process raw response', () => {
+        return knex.raw('select * from ??', ['accounts']).then(res => {
+          expect(res.callCount).to.equal(1);
+        });
+      });
+
+      it('should pass query context for raw responses', () => {
+        return knex.raw('select * from ??', ['accounts'])
+          .queryContext('the context')
+          .then(res => {
+            expect(res.queryContext).to.equal('the context');
+          });
+      });
+
+      it('should process response done in transaction', () => {
+        return knex.transaction(trx => {
+          return trx('accounts').limit(1).then(res => {
+            expect(res.callCount).to.equal(1);
+            return res;
+          });
+        }).then(res => {
+          expect(res.callCount).to.equal(1);
+        });
+      });
+
+      it('should pass query context for responses from transactions', () => {
+        return knex.transaction(trx => {
+          return trx('accounts')
+            .queryContext('the context')
+            .limit(1)
+            .then(res => {
+              expect(res.queryContext).to.equal('the context');
+              return res;
+            });
+        }).then(res => {
+          expect(res.queryContext).to.equal('the context');
+        });
+      });
+    });
+
+    describe('columnInfo with wrapIdentifier and postProcessResponse', () => {
+
+      before('setup hooks', () => {
+        knex.client.config.postProcessResponse = (response) => {
+          return _.mapKeys(response, (val, key) => {
+            return _.camelCase(key);
+          });
+        };
+
+        knex.client.config.wrapIdentifier = (id, origImpl) => {
+          return origImpl(_.snakeCase(id));
+        };
+      });
+
+      after('restore client configuration', () => {
+        knex.client.config.postProcessResponse = null;
+        knex.client.config.wrapIdentifier = null;
+      });
+
+      it('should work using camelCased table name', () => {
+        return knex('testTableTwo').columnInfo().then(res => {
+          expect(Object.keys(res)).to.eql(['id', 'accountId', 'details', 'status', 'jsonData']);
+        });
+      });
+
+      it('should work using snake_cased table name', () => {
+        return knex('test_table_two').columnInfo().then(res => {
+          expect(Object.keys(res)).to.eql(['id', 'accountId', 'details', 'status', 'jsonData']);
+        });
+      });
+
+    });
+
     it('should forward the .get() function from bluebird', function() {
       return knex('accounts').select().limit(1).then(function(accounts){
         var firstAccount = accounts[0];
@@ -62,16 +164,30 @@ module.exports = function(knex) {
           tester('oracle', "truncate table \"test_table_two\"");
           tester('mssql', 'truncate table [test_table_two]');
         })
-        .then(function() {
-
+        .then(() => {
           return knex('test_table_two')
             .select('*')
-            .then(function(resp) {
+            .then(resp => {
               expect(resp).to.have.length(0);
             });
-
+        })
+        .then(() => {
+          // Insert new data after truncate and make sure ids restart at 1.
+          // This doesn't currently work on oracle, where the created sequence
+          // needs to be manually reset.
+          if (knex.client.dialect !== 'oracle') {
+            return knex('test_table_two').insert({ status: 1 })
+              .then(res => {
+                return knex('test_table_two')
+                  .select('id')
+                  .first()
+                  .then(res => {
+                    expect(res).to.be.an('object')
+                    expect(res.id).to.equal(1);
+                  });
+              });
+          }
         });
-
     });
 
     it('should allow raw queries directly with `knex.raw`', function() {
@@ -147,7 +263,7 @@ module.exports = function(knex) {
             "type": "character"
           }
         });
-        tester('sqlite3', 'PRAGMA table_info(datatype_test)', [], {
+        tester('sqlite3', 'PRAGMA table_info(\`datatype_test\`)', [], {
           "enum_value": {
             "defaultValue": null,
             "maxLength": null,
@@ -221,7 +337,7 @@ module.exports = function(knex) {
           "nullable": false,
           "type": "character"
         });
-        tester('sqlite3', 'PRAGMA table_info(datatype_test)', [], {
+        tester('sqlite3', 'PRAGMA table_info(\`datatype_test\`)', [], {
           "defaultValue": null,
           "maxLength": "36",
           "nullable": false,
@@ -246,6 +362,32 @@ module.exports = function(knex) {
             "type": "uniqueidentifier"
           });
       });
+    });
+
+    it('#2184 - should properly escape table name for SQLite columnInfo', function() {
+      if (knex.client.dialect !== 'sqlite3') {
+        return;
+      }
+
+      return knex.schema.dropTableIfExists('group')
+        .then(function() {
+          return knex.schema.createTable('group', function(table) {
+            table.integer('foo');
+          });
+        })
+        .then(function() {
+          return knex('group').columnInfo();
+        })
+        .then(function(columnInfo) {
+          expect(columnInfo).to.deep.equal({
+            foo: {
+              type: 'integer',
+              maxLength: null,
+              nullable: true,
+              defaultValue: null,
+            },
+          });
+        });
     });
 
     it('should allow renaming a column', function() {
@@ -429,10 +571,10 @@ module.exports = function(knex) {
 
           // Ensure sleep command is removed.
           // This query will hang if a connection gets released back to the pool
-          // too early. 
+          // too early.
           // 50ms delay since killing query doesn't seem to have immediate effect to the process listing
           return Promise.resolve().then().delay(50)
-            .then(function () { 
+            .then(function () {
               return knex.raw('SHOW PROCESSLIST');
             })
             .then(function(results) {
@@ -492,6 +634,7 @@ module.exports = function(knex) {
           })
         })
         .then(function() {
+          knex.removeListener('query-response', onQueryResponse);
           expect(queryCount).to.equal(4);
         })
     });
@@ -515,6 +658,7 @@ module.exports = function(knex) {
           expect(true).to.equal(false); //Should not be resolved
         })
         .catch(function() {
+          knex.removeListener('query-error', onQueryError);
           expect(queryCount).to.equal(2);
         })
     });

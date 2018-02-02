@@ -11,7 +11,7 @@ module.exports = function(knex) {
     describe('dropTable', function() {
 
       it('has a dropTableIfExists method', function() {
-        this.timeout(30000);
+        this.timeout(process.env.KNEX_TEST_TIMEOUT || 30000);
         return Promise.all([
           knex.schema.dropTableIfExists('test_foreign_table_two').testSql(function(tester) {
             tester(['pg'], ['drop table if exists "test_foreign_table_two"']);
@@ -556,6 +556,31 @@ module.exports = function(knex) {
             t.dropColumn('remove_default');
             t.dropColumn('remove_not_null');
             t.dropColumn('datetime_to_date');
+          });
+        });
+      });
+
+      it('allows adding a field with custom collation after another field', function () {
+        return knex.schema.table('test_table_two', function(t) {
+          t.string('ref_column').after('json_data');
+        }).then(function() {
+          return knex.schema.table('test_table_two', function(t) {
+            t.string('after_column').after('ref_column').collate('utf8_bin');
+          });
+        }).then(function() {
+          return knex.schema.table('test_table_two', function(t) {
+            t.dropColumn('ref_column');
+            t.dropColumn('after_column');
+          });
+        });
+      });
+
+      it('allows adding a field with custom collation first', function () {
+        return knex.schema.table('test_table_two', function(t) {
+          t.string('first_column').first().collate('utf8_bin');
+        }).then(function() {
+          return knex.schema.table('test_table_two', function(t) {
+            t.dropColumn('first_column');
           });
         });
       });

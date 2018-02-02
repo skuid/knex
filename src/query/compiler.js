@@ -26,7 +26,7 @@ function QueryCompiler(client, builder) {
   this.timeout = builder._timeout || false;
   this.cancelOnTimeout = builder._cancelOnTimeout || false;
   this.grouped = groupBy(builder._statements, 'grouping');
-  this.formatter = client.formatter()
+  this.formatter = client.formatter(builder)
 }
 
 const components = [
@@ -52,12 +52,20 @@ assign(QueryCompiler.prototype, {
       timeout: this.timeout,
       cancelOnTimeout: this.cancelOnTimeout,
       bindings: this.formatter.bindings || [],
-      __knexQueryUid: uuid.v4(),
-      toNative: () => ({
-        sql: this.client.positionBindings(query.sql),
-        bindings: this.client.prepBindings(query.bindings)
-      })
+      __knexQueryUid: uuid.v4()
     };
+
+    Object.defineProperties(query, {
+      toNative: {
+        value: () => {
+          return {
+            sql: this.client.positionBindings(query.sql),
+            bindings: this.client.prepBindings(query.bindings)
+          };
+        },
+        enumerable: false
+      }
+    });
 
     if (isString(val)) {
       query.sql = val;
@@ -166,6 +174,9 @@ assign(QueryCompiler.prototype, {
         if (stmt.type === 'aggregate') {
           sql.push(this.aggregate(stmt))
         }
+        else if (stmt.type === 'aggregateRaw') {
+          sql.push(this.aggregateRaw(stmt))
+        }
         else if (stmt.value && stmt.value.length > 0) {
           sql.push(this.formatter.columnize(stmt.value))
         }
@@ -174,8 +185,8 @@ assign(QueryCompiler.prototype, {
     if (sql.length === 0) sql = ['*'];
     return `select ${distinct ? 'distinct ' : ''}` +
       sql.join(', ') + (this.tableName
-        ? ` from ${this.single.only ? 'only ' : ''}${this.tableName}`
-        : '');
+      ? ` from ${this.single.only ? 'only ' : ''}${this.tableName}`
+      : '');
   },
 
   aggregate(stmt) {
@@ -192,6 +203,11 @@ assign(QueryCompiler.prototype, {
       );
     }
     return `${stmt.method}(${distinct + this.formatter.wrap(val)})`;
+  },
+
+  aggregateRaw(stmt) {
+    const distinct = stmt.aggregateDistinct ? 'distinct ' : '';
+    return `${stmt.method}(${distinct + this.formatter.unwrapRaw(stmt.value)})`;
   },
 
   // Compiles all each of the `join` clauses on the query,
@@ -546,11 +562,6 @@ assign(QueryCompiler.prototype, {
   withWrapped(statement) {
     const val = this.formatter.rawOrFn(statement.value);
     return val && this.formatter.columnize(statement.alias) + ' as (' + val + ')' || '';
-  },
-
-  withRaw(statement) {
-    return this.formatter.columnize(statement.alias) + ' as (' +
-      this.formatter.unwrapRaw(statement.value) + ')';
   },
 
   // Determines whether to add a "not" prefix to the where clause.

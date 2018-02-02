@@ -45,18 +45,18 @@ assign(Runner.prototype, {
     // If there are any "error" listeners, we fire an error event
     // and then re-throw the error to be eventually handled by
     // the promise chain. Useful if you're wrapping in a custom `Promise`.
-    .catch(function(err) {
-      if (runner.builder._events && runner.builder._events.error) {
-        runner.builder.emit('error', err);
-      }
-      throw err;
-    })
+      .catch(function(err) {
+        if (runner.builder._events && runner.builder._events.error) {
+          runner.builder.emit('error', err);
+        }
+        throw err;
+      })
 
     // Fire a single "end" event on the builder when
     // all queries have successfully completed.
-    .tap(function() {
-      runner.builder.emit('end');
-    })
+      .tap(function() {
+        runner.builder.emit('end');
+      })
 
   },
 
@@ -132,19 +132,25 @@ assign(Runner.prototype, {
     return queryPromise
       .then((resp) => {
         const processedResponse = this.client.processResponse(resp, runner);
+        const queryContext = this.builder.queryContext();
+        const postProcessedResponse = this.client
+          .postProcessResponse(processedResponse, queryContext);
+
         this.builder.emit(
           'query-response',
-          processedResponse,
+          postProcessedResponse,
           assign({__knexUid: this.connection.__knexUid}, obj),
           this.builder
         );
+
         this.client.emit(
           'query-response',
-          processedResponse,
+          postProcessedResponse,
           assign({__knexUid: this.connection.__knexUid}, obj),
           this.builder
         );
-        return processedResponse;
+
+        return postProcessedResponse;
       }).catch(Promise.TimeoutError, error => {
         const { timeout, sql, bindings } = obj;
 
